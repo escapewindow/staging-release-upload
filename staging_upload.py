@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 task_graph_id = "d996zZnrTJKne2LHXUTP6w"
 signing_task_names = ["signing-linux-devedition-nightly/opt"]
 num_expected_signing_tasks = 1
+max_concurrent_aiohttp_streams = 10
 # map to copy artifacts to bucket - public/build/target.complete.mar
 
 # where are the mac / win mars?
@@ -46,7 +47,8 @@ async def upload():
 
 
 async def async_main():
-    with aiohttp.ClientSession() as session:
+    conn = aiohttp.TCPConnector(limit=max_concurrent_aiohttp_streams)
+    with aiohttp.ClientSession(connector=conn) as session:
         queue = Queue(session=session)
         graph = await queue.listTaskGroup(task_graph_id)
         filtered = get_filtered(graph)

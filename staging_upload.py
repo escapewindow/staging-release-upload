@@ -18,7 +18,7 @@ import tempfile
 from mozapkpublisher.get_apk import check_apk_against_checksum_file as check_mar_against_checksum_file
 from mozapkpublisher.utils import file_sha512sum
 from beetmoverscript.script import upload_to_s3, move_beets, generate_beetmover_manifest
-from scriptworker.utils import download_file
+from scriptworker.utils import download_file, raise_future_exceptions
 
 log = logging.getLogger(__name__)
 max_concurrent_aiohttp_streams = 10
@@ -29,11 +29,11 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 
 
 LATEST_MAR_LOCATIONS = {
-    # 'win32': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win32-opt/artifacts/public/build/firefox-54.0.en-US.win32.complete.mar',
-    # 'win64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win64-opt/artifacts/public/build/firefox-54.0.en-US.win64.complete.mar',
+    'win32': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win32-opt/artifacts/public/build/firefox-54.0.en-US.win32.complete.mar',
+    'win64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win64-opt/artifacts/public/build/firefox-54.0.en-US.win64.complete.mar',
     'mac': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.macosx64-opt/artifacts/public/build/firefox-54.0.en-US.mac.complete.mar',
     'linux-i686': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux-opt.en-US/artifacts/public/build/update/target.complete.mar',
-    # 'linux-x86_64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux64-opt.en-US/artifacts/public/build/update/target.complete.mar',
+    'linux-x86_64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux64-opt.en-US/artifacts/public/build/update/target.complete.mar',
 }
 
 ALL_LOCALES = (
@@ -65,22 +65,34 @@ def die(msg):
 
 async def download(context):
     abs_path_per_platform = {}
+    tasks = []
+
     for platform, mar_url in LATEST_MAR_LOCATIONS.items():
-        log.info('Downloading {}'.format(platform))
+        log.info('Downloading {}...'.format(platform))
         platform_sub_folder = os.path.join(context.tmp_dir, platform)
 
         mar_abs_path = os.path.join(platform_sub_folder, 'update', get_filename_from_url(mar_url))
-        await download_file(context, url=mar_url, abs_filename=mar_abs_path)
+        tasks.append(
+            asyncio.ensure_future(
+                download_file(context, url=mar_url, abs_filename=mar_abs_path)
+            )
+        )
 
         checksums_url = mar_url.replace('.complete.mar', '.checksums')
         checksums_url = checksums_url.replace('update/', '')
         checksums_abs_path = os.path.join(platform_sub_folder, get_filename_from_url(checksums_url))
-        await download_file(context, url=checksums_url, abs_filename=checksums_abs_path)
+        tasks.append(
+            asyncio.ensure_future(
+                download_file(context, url=checksums_url, abs_filename=checksums_abs_path)
+            )
+        )
 
         abs_path_per_platform[platform] = {
             'mar': mar_abs_path,
             'checksums': checksums_abs_path,
         }
+
+    await raise_future_exceptions(tasks)
 
     return abs_path_per_platform
 
@@ -106,6 +118,8 @@ def checksums(context, abs_path_per_platform):
 
 
 async def upload(context, path_with_sha512sums_per_platform):
+    tasks = []
+
     for platform, details in path_with_sha512sums_per_platform.items():
         context.release_props['platform'] = platform
 
@@ -121,8 +135,13 @@ async def upload(context, path_with_sha512sums_per_platform):
             }
 
             log.info('Beetmoving {}/{}...'.format(platform, locale))
-            await move_beets(context, artifacts_to_beetmove, mapping_manifest)
+            tasks.append(
+                asyncio.ensure_future(
+                    move_beets(context, artifacts_to_beetmove, mapping_manifest)
+                )
+            )
 
+    await raise_future_exceptions(tasks)
     await _upload_general_sha512sums_file(context, path_with_sha512sums_per_platform)
 
 
@@ -188,6 +207,7 @@ async def async_main():
         with tempfile.TemporaryDirectory() as tmp_dir:
             context = Context(session, tmp_dir)
             abs_path_per_platform = await download(context)
+            log.info('All files downloaded')
             path_with_sha512sums_per_platform = checksums(context, abs_path_per_platform)
 
             await upload(context, path_with_sha512sums_per_platform)

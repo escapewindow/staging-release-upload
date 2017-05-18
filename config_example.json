@@ -1,0 +1,22 @@
+{
+    "actions": {
+      "push-to-releases": {
+          "devedition_release_repacks": "/path/to/staging-release-upload/devedition_release.yml"
+      },
+      "push-to-candidates": {
+          "devedition_candidates_repacks": "/path/to/staging-release-upload/devedition_candidates.yml"
+      }
+    },
+    "checksums_digests": ["sha512", "sha256"],
+    "bucket_config": {
+        "release": {
+            "credentials": {
+                "id": "dummy",
+                "key": "dummy"
+            },
+            "buckets": {
+                "devedition": "mozilla-releng-beet-mover-dev"
+            }
+        }
+    }
+}

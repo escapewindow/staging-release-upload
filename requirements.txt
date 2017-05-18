@@ -1,4 +1,5 @@
 boto3
 taskcluster
 scriptworker
-mozapkpublisher
+-e ../../mozilla-releng/mozapkpublisher
+-e ../../mozilla-releng/beetmoverscript

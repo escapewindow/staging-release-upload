@@ -21,7 +21,12 @@ from beetmoverscript.script import upload_to_s3, move_beets, generate_beetmover_
 from scriptworker.utils import download_file, raise_future_exceptions
 
 log = logging.getLogger(__name__)
-max_concurrent_aiohttp_streams = 10
+# XXX There are less than 100 locales to upload. Having fewer connection open leads to about 5 timeouts. Here's why:
+# On S3, you first make a request to create an artifact. Then you upload it in a second request. Due to the number of
+# files to upload, some files time out before their upload start.
+# Another solution is to increase the timeout time. But if you have a good network connection (tested with an upload
+# speed of 25 MB/s), it's just faster to have more connections.
+max_concurrent_aiohttp_streams = 100
 BUILD_NUMBER = 1    # XXX Edit this value
 VERSION = '54.0b1'  # XXX Edit this value
 
@@ -118,11 +123,13 @@ def checksums(context, abs_path_per_platform):
 
 
 async def upload(context, path_with_sha512sums_per_platform):
-    tasks = []
+
 
     for platform, details in path_with_sha512sums_per_platform.items():
         context.release_props['platform'] = platform
 
+        tasks = []
+        log.info('Uploading files for platform "{}"...'.format(platform))
         for locale in ALL_LOCALES:
             context.task['payload']['locale'] = locale
             mapping_manifest = generate_beetmover_manifest(context)
@@ -134,16 +141,21 @@ async def upload(context, path_with_sha512sums_per_platform):
                 },
             }
 
-            log.info('Beetmoving {}/{}...'.format(platform, locale))
             tasks.append(
                 asyncio.ensure_future(
                     move_beets(context, artifacts_to_beetmove, mapping_manifest)
                 )
             )
 
-    await raise_future_exceptions(tasks)
-    await _upload_general_sha512sums_file(context, path_with_sha512sums_per_platform)
 
+        # We wait for each platform to finish. This allows to have a decent number of parallel uploads,
+        # And reduces the number of timeouts. See max_concurrent_aiohttp_streams for more details
+        await raise_future_exceptions(tasks)
+        log.info('Uploaded all files for platform "{}"'.format(platform))
+
+    log.info('Uploading SHA512SUMS...')
+    await _upload_general_sha512sums_file(context, path_with_sha512sums_per_platform)
+    log.info('Uploaded SHA512SUMS')
 
 async def _upload_general_sha512sums_file(context, path_with_sha512sums_per_platform):
     general_shasum_file = _generate_sha512sums_file(context, path_with_sha512sums_per_platform)
@@ -158,7 +170,7 @@ async def _upload_general_sha512sums_file(context, path_with_sha512sums_per_plat
 def _generate_sha512sums_file(context, path_with_sha512sums_per_platform):
     # TODO this logic should not duplicate the one in move_beets()
     lines = [
-        '{sha512}  update/{platform}/{locale}/devedition-{version}.complete.mar'.format(
+        '{sha512}  update/{platform}/{locale}/devedition-{version}.complete.mar\n'.format(
             sha512=details['sha512'], platform=platform, locale=locale, version=VERSION,
         )
         for platform, details in path_with_sha512sums_per_platform.items()
@@ -214,8 +226,9 @@ async def async_main():
 
 
 def main():
-    log.setLevel(logging.DEBUG)
-    log.addHandler(logging.StreamHandler())
+    FORMAT = '%(asctime)s - %(filename)s - %(levelname)s - %(message)s'
+    logging.basicConfig(format=FORMAT, level=logging.DEBUG)
+
     event_loop = asyncio.get_event_loop()
     event_loop.run_until_complete(async_main())
 

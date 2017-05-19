@@ -1,5 +1,4 @@
-boto3
-taskcluster
-scriptworker
--e ../../mozilla-releng/mozapkpublisher
--e ../../mozilla-releng/beetmoverscript
+taskcluster==1.3.2
+scriptworker==4.0.0
+mozapkpublisher==0.3.1
+beetmoverscript==0.5.3

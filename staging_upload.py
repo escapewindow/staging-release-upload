@@ -1,17 +1,11 @@
 #!/usr/bin/env python
-# s3cmd -c ~/.s3cfg-mozilla cp \
-#   "s3://net-mozaws-prod-delivery-firefox/pub/firefox/tinderbox-builds/mozilla-release-win32/1491998108/firefox-53.0.en-US.win32.installer-stub.exe" \
-#   "s3://net-mozaws-prod-delivery-firefox/pub/firefox/candidates/53.0-candidates/build5/partner-repacks/funnelcake110/v1/win32/en-US/Firefox Setup Stub 53.0.exe"
 
 import aiohttp
 import asyncio
 import datetime
-import hashlib
 import json
 import logging
-import pprint
 import os
-import re
 import sys
 import tempfile
 
@@ -34,11 +28,11 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
 
 
 LATEST_MAR_LOCATIONS = {
-    'win32': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win32-opt/artifacts/public/build/firefox-54.0.en-US.win32.complete.mar',
-    'win64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win64-opt/artifacts/public/build/firefox-54.0.en-US.win64.complete.mar',
-    'mac': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.macosx64-opt/artifacts/public/build/firefox-54.0.en-US.mac.complete.mar',
-    'linux-i686': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux-opt.en-US/artifacts/public/build/update/target.complete.mar',
-    'linux-x86_64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux64-opt.en-US/artifacts/public/build/update/target.complete.mar',
+    'win32': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win32-opt/artifacts/public/build/firefox-54.0.en-US.win32.complete.mar',           # NOQA
+    'win64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.win64-opt/artifacts/public/build/firefox-54.0.en-US.win64.complete.mar',           # NOQA
+    'mac': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition.macosx64-opt/artifacts/public/build/firefox-54.0.en-US.mac.complete.mar',            # NOQA
+    'linux-i686': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux-opt.en-US/artifacts/public/build/update/target.complete.mar',      # NOQA
+    'linux-x86_64': 'https://index.taskcluster.net/v1/task/gecko.v2.jamun.latest.devedition-l10n.linux64-opt.en-US/artifacts/public/build/update/target.complete.mar',  # NOQA
 }
 
 ALL_LOCALES = (
@@ -52,15 +46,6 @@ ALL_LOCALES = (
   'sq', 'sr', 'sv-SE', 'ta', 'te', 'th', 'tr', 'uk', 'ur', 'uz', 'vi', 'xh',
   'zh-CN', 'zh-TW',
 )
-
-def get_filtered(graph):
-    filtered = [
-        e['status']['taskId'] for e in graph['tasks']
-        if e['status']['state'] in ['completed']
-        and e['status']['workerType'] in ['signing-linux-v1']
-        and e['task']['metadata']['name'] in signing_task_names
-    ]
-    return filtered
 
 
 def die(msg):
@@ -211,6 +196,7 @@ class Context:
             self.config = json.load(f)
 
         self.checksums = {}
+
 
 async def async_main():
     conn = aiohttp.TCPConnector(limit=max_concurrent_aiohttp_streams)

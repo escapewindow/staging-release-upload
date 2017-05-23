@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -15,13 +16,13 @@ from beetmoverscript.script import upload_to_s3, move_beets, generate_beetmover_
 from scriptworker.utils import download_file, raise_future_exceptions
 
 log = logging.getLogger(__name__)
-# XXX There are less than 100 locales to upload. Having fewer connection open leads to about 5 timeouts. Here's why:
-# On S3, you first make a request to create an artifact. Then you upload it in a second request. Due to the number of
-# files to upload, some files time out before their upload start.
+# XXX This number defines the size of a batch. You need to batch uploads because we're throttled down on the server side.
+# Batch are also needed because on S3, you first make a request to create an artifact. Then you upload it in a second
+# request. Due to the number of files to upload, some files time out before their upload start.
 # Another solution is to increase the timeout time. But if you have a good network connection (tested with an upload
 # speed of 25 MB/s), it's just faster to have more connections.
-max_concurrent_aiohttp_streams = 100
-BUILD_NUMBER = 1    # XXX Edit this value
+max_concurrent_aiohttp_streams = 10
+BUILD_NUMBER = 2    # XXX Edit this value
 VERSION = '54.0b1'  # XXX Edit this value
 
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config.json')
@@ -108,39 +109,55 @@ def checksums(context, abs_path_per_platform):
 
 
 async def upload(context, path_with_sha512sums_per_platform):
-
-
     for platform, details in path_with_sha512sums_per_platform.items():
         context.release_props['platform'] = platform
-
-        tasks = []
         log.info('Uploading files for platform "{}"...'.format(platform))
-        for locale in ALL_LOCALES:
-            context.task['payload']['locale'] = locale
-            mapping_manifest = generate_beetmover_manifest(context)
-
-            artifact_name = 'target.complete.mar'
-            artifacts_to_beetmove = {
-                locale: {
-                    artifact_name: details['mar'],
-                },
-            }
-
-            tasks.append(
-                asyncio.ensure_future(
-                    move_beets(context, artifacts_to_beetmove, mapping_manifest)
-                )
-            )
-
-
-        # We wait for each platform to finish. This allows to have a decent number of parallel uploads,
-        # And reduces the number of timeouts. See max_concurrent_aiohttp_streams for more details
-        await raise_future_exceptions(tasks)
-        log.info('Uploaded all files for platform "{}"'.format(platform))
+        await _upload_platform_batch_by_batch(context, platform, details)
 
     log.info('Uploading SHA512SUMS...')
     await _upload_general_sha512sums_file(context, path_with_sha512sums_per_platform)
     log.info('Uploaded SHA512SUMS')
+
+
+async def _upload_platform_batch_by_batch(context, platform, platform_details):
+    # We wait for a batch to finish. This allows to have a decent number of parallel uploads,
+    # And reduces the number of timeouts. See max_concurrent_aiohttp_streams for more details
+    batch_size = max_concurrent_aiohttp_streams
+    total_number_of_batches = math.ceil(len(ALL_LOCALES) / batch_size)
+    for i in range(total_number_of_batches):
+        batch_lower_bound = i * batch_size
+        batch_upper_bound = (i + 1) * batch_size
+        batch_of_locales = ALL_LOCALES[batch_lower_bound:batch_upper_bound]
+
+        log.info('{platform}: Uploading batch {batch_number}/{total_batches} (locales: {locales})...'.format(
+            platform=platform, batch_number=i+1, total_batches=total_number_of_batches, locales=batch_of_locales
+        ))
+
+        await _upload_one_batch(context, platform_details, batch_of_locales)
+        log.info('{}: Batch {}/{} uploaded'.format(platform, i+1, total_number_of_batches+1))
+
+
+async def _upload_one_batch(context, platform_details, batch_of_locales):
+    batched_tasks = []
+    for locale in batch_of_locales:
+        context.task['payload']['locale'] = locale
+        mapping_manifest = generate_beetmover_manifest(context)
+
+        artifact_name = 'target.complete.mar'
+        artifacts_to_beetmove = {
+            locale: {
+                artifact_name: platform_details['mar'],
+            },
+        }
+
+        batched_tasks.append(
+            asyncio.ensure_future(
+                move_beets(context, artifacts_to_beetmove, mapping_manifest)
+            )
+        )
+
+    await raise_future_exceptions(batched_tasks)
+
 
 async def _upload_general_sha512sums_file(context, path_with_sha512sums_per_platform):
     general_shasum_file = _generate_sha512sums_file(context, path_with_sha512sums_per_platform)
